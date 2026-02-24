@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import { v4 as uuidv4 } from "uuid";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
+import cors from "cors";
 
 let _prisma: PrismaClient;
 
@@ -56,8 +57,7 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-// Global Error Handler removed from here
-
+app.use(cors()); // Enable CORS for all routes
 app.use(express.json());
 app.use(cookieParser());
 
@@ -181,16 +181,21 @@ cron.schedule("0 */6 * * *", async () => {
   }
 });
 
-// Scraper function refined with more robust detection
+// Scraper function refined with more robust detection and timeout
 async function scrapeProductData(url: string) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
+
   try {
     const response = await fetch(url, {
+      signal: controller.signal,
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9"
       }
     });
+    clearTimeout(timeoutId);
     
     if (!response.ok) {
       throw new Error(`Failed to fetch URL: ${response.statusText}`);
@@ -398,24 +403,29 @@ app.post("/api/products", sessionMiddleware, async (req: any, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
 
-  const { price, title, currency } = await scrapePrice(url);
+  try {
+    const { price, title, currency } = await scrapePrice(url);
 
-  const product = await prisma.product.create({
-    data: {
-      url,
-      title,
-      currentPrice: price,
-      currency: currency,
-      userId: req.userId,
-      priceHistory: {
-        create: {
-          price: price,
+    const product = await prisma.product.create({
+      data: {
+        url,
+        title,
+        currentPrice: price,
+        currency: currency,
+        userId: req.userId,
+        priceHistory: {
+          create: {
+            price: price,
+          },
         },
       },
-    },
-  });
+    });
 
-  res.json(product);
+    res.json(product);
+  } catch (error: any) {
+    console.error("Failed to add product:", error);
+    res.status(500).json({ error: "Failed to add product. Please try again." });
+  }
 });
 
 app.post("/api/products/:id/check", sessionMiddleware, async (req: any, res) => {
