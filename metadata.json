@@ -1,0 +1,5 @@
+{
+  "name": "Price-Watcher",
+  "description": "Track e-commerce product prices and view history.",
+  "requestFramePermissions": []
+}
