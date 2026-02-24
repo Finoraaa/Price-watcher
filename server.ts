@@ -404,6 +404,58 @@ app.delete("/api/products/:id", sessionMiddleware, async (req: any, res) => {
   res.json({ success: true });
 });
 
+// Vercel Cron Job Endpoint
+app.get("/api/cron/check", async (req, res) => {
+  // Security check: Vercel sends a specific header
+  // if (req.headers['x-vercel-cron'] !== 'true') {
+  //   return res.status(401).json({ error: 'Unauthorized' });
+  // }
+
+  console.log("Running scheduled price check via Vercel Cron...");
+  const products = await prisma.product.findMany({
+    include: { user: true }
+  });
+  
+  let updatedCount = 0;
+  for (const product of products) {
+    try {
+      const { price, currency } = await scrapePrice(product.url);
+      if (price > 0) {
+        const oldPrice = product.currentPrice;
+        
+        await prisma.product.update({
+          where: { id: product.id },
+          data: {
+            currentPrice: price,
+            currency: currency,
+            priceHistory: {
+              create: {
+                price: price,
+              },
+            },
+          },
+        });
+
+        if (price < oldPrice && product.user.notificationEmail) {
+          await sendPriceDropEmail(
+            product.user.notificationEmail,
+            product.title,
+            oldPrice,
+            price,
+            currency,
+            product.url
+          );
+        }
+        updatedCount++;
+      }
+    } catch (err) {
+      console.error(`Cron failed for ${product.url}:`, err);
+    }
+  }
+  
+  res.json({ success: true, updated: updatedCount });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -420,4 +472,8 @@ async function startServer() {
   });
 }
 
-startServer();
+if (process.env.NODE_ENV !== "production") {
+  startServer();
+}
+
+export default app;
