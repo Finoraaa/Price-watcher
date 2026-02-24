@@ -531,7 +531,8 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   }
   res.status(500).json({ 
     error: "Internal Server Error", 
-    message: err.message 
+    message: err.message, // Expose error message for debugging
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
 });
 

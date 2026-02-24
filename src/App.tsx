@@ -107,8 +107,16 @@ export default function App() {
         setStatus({ type: 'error', message: data.error || "Failed to add product" });
       }
     } catch (err: any) {
-      setStatus({ type: 'error', message: `Connection error: ${err.message || 'Check your internet or server status'}` });
       console.error("Failed to add product", err);
+      let errorMessage = "Connection error. Please check your internet.";
+      
+      if (err.name === 'SyntaxError') {
+        errorMessage = "Server error: Invalid response format.";
+      } else if (err.message) {
+        errorMessage = `Error: ${err.message}`;
+      }
+      
+      setStatus({ type: 'error', message: errorMessage });
     } finally {
       setLoading(false);
       // Clear status after 5 seconds
