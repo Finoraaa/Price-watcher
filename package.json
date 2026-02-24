@@ -5,7 +5,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "tsx api/index.ts",
     "build": "prisma generate && vite build",
     "postinstall": "prisma generate",
     "preview": "vite preview",

@@ -71,9 +71,15 @@ export default function App() {
     try {
       const res = await fetch("/api/products");
       const data = await res.json();
-      setProducts(data);
+      if (Array.isArray(data)) {
+        setProducts(data);
+      } else {
+        console.error("Products response is not an array:", data);
+        setProducts([]);
+      }
     } catch (err) {
       console.error("Failed to fetch products", err);
+      setProducts([]);
     }
   };
 
@@ -100,8 +106,8 @@ export default function App() {
       } else {
         setStatus({ type: 'error', message: data.error || "Failed to add product" });
       }
-    } catch (err) {
-      setStatus({ type: 'error', message: "Network error. Please try again." });
+    } catch (err: any) {
+      setStatus({ type: 'error', message: `Connection error: ${err.message || 'Check your internet or server status'}` });
       console.error("Failed to add product", err);
     } finally {
       setLoading(false);
@@ -301,7 +307,7 @@ export default function App() {
 
           <div className="grid grid-cols-1 gap-6">
             <AnimatePresence mode="popLayout">
-              {products.map((product) => {
+              {Array.isArray(products) && products.map((product) => {
                 const change = getPriceChange(product);
                 const chartData = [...product.priceHistory].reverse().map(h => ({
                   time: new Date(h.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),

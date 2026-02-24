@@ -7,40 +7,92 @@ import { v4 as uuidv4 } from "uuid";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
 
-const prisma = new PrismaClient();
+let _prisma: PrismaClient;
+
+function getPrisma() {
+  if (!_prisma) {
+    _prisma = new PrismaClient();
+  }
+  return _prisma;
+}
+
+const prisma = new Proxy({} as PrismaClient, {
+  get: (target, prop) => {
+    const db = getPrisma();
+    const value = (db as any)[prop];
+    if (typeof value === 'function') {
+      return value.bind(db);
+    }
+    return value;
+  }
+});
+
 const app = express();
 const PORT = 3000;
+
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
+// Health check and DB connection test
+app.get("/api/health", async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ 
+      status: "ok", 
+      database: "connected",
+      env: process.env.NODE_ENV,
+      hasDbUrl: !!process.env.DATABASE_URL
+    });
+  } catch (err: any) {
+    console.error("Health check failed:", err);
+    res.status(500).json({ 
+      status: "error", 
+      message: err.message,
+      hasDbUrl: !!process.env.DATABASE_URL 
+    });
+  }
+});
+
+// Global Error Handler removed from here
 
 app.use(express.json());
 app.use(cookieParser());
 
 // Session Middleware to ensure each user has a unique ID
 const sessionMiddleware = async (req: any, res: Response, next: NextFunction) => {
-  let sessionId = req.cookies.sessionId;
-  
-  if (!sessionId) {
-    sessionId = uuidv4();
-    res.cookie("sessionId", sessionId, { 
-      maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
-      httpOnly: true,
-      sameSite: 'none',
-      secure: true
-    });
+  try {
+    let sessionId = req.cookies.sessionId;
+    
+    if (!sessionId) {
+      sessionId = uuidv4();
+      res.cookie("sessionId", sessionId, { 
+        maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
+        httpOnly: true,
+        sameSite: 'none',
+        secure: true
+      });
+    }
+    
+    // Ensure user exists in DB
+    let user = await prisma.user.findUnique({ where: { sessionId } });
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          sessionId,
+          email: `${sessionId.substring(0, 8)}@anonymous.com`,
+        },
+      });
+    }
+    
+    req.userId = user.id;
+    next();
+  } catch (error) {
+    console.error("Session middleware error:", error);
+    next(error);
   }
-  
-  // Ensure user exists in DB
-  let user = await prisma.user.findUnique({ where: { sessionId } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: {
-        sessionId,
-        email: `${sessionId.substring(0, 8)}@anonymous.com`,
-      },
-    });
-  }
-  
-  req.userId = user.id;
-  next();
 };
 
 // Email Transporter Setup
@@ -329,12 +381,17 @@ app.post("/api/user/settings", sessionMiddleware, async (req: any, res) => {
 });
 
 app.get("/api/products", sessionMiddleware, async (req: any, res) => {
-  const products = await prisma.product.findMany({
-    where: { userId: req.userId },
-    include: { priceHistory: { orderBy: { checkedAt: "desc" }, take: 10 } },
-    orderBy: { createdAt: "desc" },
-  });
-  res.json(products);
+  try {
+    const products = await prisma.product.findMany({
+      where: { userId: req.userId },
+      include: { priceHistory: { orderBy: { checkedAt: "desc" }, take: 10 } },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(products);
+  } catch (error) {
+    console.error("Failed to fetch products:", error);
+    res.status(500).json({ error: "Failed to fetch products" });
+  }
 });
 
 app.post("/api/products", sessionMiddleware, async (req: any, res) => {
@@ -456,16 +513,29 @@ app.get("/api/cron/check", async (req, res) => {
   res.json({ success: true, updated: updatedCount });
 });
 
+// Global Error Handler
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  console.error("Global Error:", err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(500).json({ 
+    error: "Internal Server Error", 
+    message: err.message 
+  });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
+      configFile: "./vite.config.ts",
     });
     app.use(vite.middlewares);
-  } else {
-    app.use(express.static("dist"));
   }
+  // Note: On Vercel, we don't serve static files via Express. 
+  // Vercel handles the 'dist' folder automatically.
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
